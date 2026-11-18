@@ -44,7 +44,7 @@ test("computer clock, real AVA results, visible moving visitors and day/night li
   await page.goto("/");
   await ready(page);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-    "公园人流与设施模拟器",
+    "ParkWeave · 公园人流与设施模拟器",
   );
   await expect(page.locator(".map-clock strong")).toHaveText("17:30");
   const expected = simulate(facilities, "mild", 17.5);

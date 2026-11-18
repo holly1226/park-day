@@ -411,7 +411,7 @@ export default function App() {
               <TreePine size={24} />
             </span>
             <span>
-              公园的一天<small>PARK LAYOUT LAB</small>
+              ParkWeave<small>PARK LAYOUT LAB</small>
             </span>
           </a>
           <nav aria-label="主导航">
@@ -453,7 +453,7 @@ export default function App() {
             <div className="eyebrow">
               <span /> PARK SIMULATOR · AVA 4.0
             </div>
-            <h1>公园人流与设施模拟器</h1>
+            <h1>ParkWeave · 公园人流与设施模拟器</h1>
             <p>
               自己布置长椅、树木和路灯，看看人往哪走、在哪停留，再用 AVA
               比较方案。
@@ -1255,7 +1255,7 @@ export default function App() {
       <footer>
         <a className="footer-brand" href="#">
           <TreePine size={17} />
-          公园的一天 · 布局实验室
+          ParkWeave · 公园布局实验室
         </a>
         <span>原创像素场景 · GSAP 动画 · React Bits 交互 · AVA 数据分析</span>
         <div>
