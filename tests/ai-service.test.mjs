@@ -1,3 +1,4 @@
+import { observations, facilities, buildObservations } from "../src/data.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -10,6 +11,7 @@ test("AI endpoint reports missing configuration and executes the full AVA analyz
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${server.address().port}/api/analyze`;
   let calls = 0;
+  let expectedCount = observations.length;
   const provider = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
@@ -21,7 +23,7 @@ test("AI endpoint reports missing configuration and executes the full AVA analyz
     const content = summary
       ? JSON.stringify({
           queryExplanation: "统计所有模拟观测行。",
-          conclusion: "共有 744 条模拟观测记录。",
+          conclusion: `共有 ${expectedCount} 条模拟观测记录。`,
         })
       : 'SELECT COUNT(*) AS "记录数" FROM data';
     res.setHeader("Content-Type", "application/json");
@@ -64,10 +66,27 @@ test("AI endpoint reports missing configuration and executes the full AVA analyz
     });
     const answer = await response.json();
     assert.equal(response.status, 200, JSON.stringify(answer));
-    assert.equal(Number(answer.data[0]["记录数"]), 744);
+    assert.equal(Number(answer.data[0]["记录数"]), observations.length);
     assert.match(answer.sql, /COUNT/);
-    assert.match(answer.summary, /744/);
+    assert.ok(answer.summary.includes(String(observations.length)));
     assert.equal(calls, 2);
+    const layout = facilities.filter((f) => f.id === "b1" || f.kind === "路灯");
+    expectedCount = buildObservations(layout).length;
+    const edited = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: "全部模拟记录多少行？",
+        weather: "mild",
+        hour: 22,
+        scenario: "current",
+        layout,
+      }),
+    });
+    const editedAnswer = await edited.json();
+    assert.equal(edited.status, 200, JSON.stringify(editedAnswer));
+    assert.equal(Number(editedAnswer.data[0]["记录数"]), expectedCount);
+    assert.equal(calls, 4);
     const forbidden = await fetch(url, {
       method: "POST",
       headers: { Origin: "https://other.example" },

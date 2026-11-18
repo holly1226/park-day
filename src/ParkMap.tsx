@@ -1,5 +1,10 @@
+import { useRef, useState } from "react";
+import Crowd from "./Crowd";
 import {
   facilities,
+  treesFor,
+  solarState,
+  type Visitor,
   type Facility,
   type Layer,
   type Observation,
@@ -12,6 +17,13 @@ type Props = {
   onSelect: (id: string) => void;
   highlight: string[];
   playing: boolean;
+  layout: Facility[];
+  visitors: Visitor[];
+  editing: boolean;
+  placing: string | null;
+  motion: boolean;
+  onMove: (id: string, x: number, y: number) => void;
+  onPlace: (x: number, y: number) => void;
 };
 function Tree({
   x,
@@ -58,7 +70,16 @@ function Bench() {
     </>
   );
 }
-function FacilityIcon({ f }: { f: Facility }) {
+function FacilityIcon({ f, night = false }: { f: Facility; night?: boolean }) {
+  if (f.kind === "树木") return <Tree x={0} y={14} s={1.2} />;
+  if (f.kind === "路灯")
+    return (
+      <>
+        <path d="M-3-32h6v48h-6zM-11-36h22v5h-22z" fill="#637260" />
+        <path d="M-8-31H8v8H-8z" fill={night ? "#ffe4a0" : "#d4d6b6"} />
+        <path d="M-6 15H6v4H-6z" fill="#526550" />
+      </>
+    );
   if (f.kind === "座椅") return <Bench />;
   if (f.kind === "凉亭")
     return (
@@ -132,25 +153,6 @@ function FacilityIcon({ f }: { f: Facility }) {
     </>
   );
 }
-const trees = Array.from({ length: 110 }, (_, i) => ({
-  x: 35 + ((i * 163 + Math.floor(i / 7) * 51) % 855),
-  y: 65 + ((i * 89 + Math.floor(i / 4) * 23) % 455),
-  s: 0.65 + (i % 4) * 0.12,
-  pine: i % 5 === 0,
-})).filter((t) => {
-  const pond = ((t.x - 531) / 151) ** 2 + ((t.y - 148) / 85) ** 2 < 1.3;
-  const paths =
-    Math.abs(t.x - 330) < 27 ||
-    Math.abs(t.y - 325) < 25 ||
-    Math.abs(t.y - 510) < 28;
-  const lawn = t.x > 355 && t.x < 575 && t.y > 355 && t.y < 480;
-  return (
-    !pond &&
-    !paths &&
-    !lawn &&
-    !facilities.some((f) => Math.hypot(t.x - f.x, t.y - f.y) < 49)
-  );
-});
 export default function ParkMap({
   rows,
   hour,
@@ -159,17 +161,88 @@ export default function ParkMap({
   onSelect,
   highlight,
   playing,
+  layout,
+  visitors,
+  editing,
+  placing,
+  motion,
+  onMove,
+  onPlace,
 }: Props) {
+  const svg = useRef<SVGSVGElement>(null);
+  const drag = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    pointer: number;
+    moved: boolean;
+  } | null>(null);
+  const [ghost, setGhost] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const suppress = useRef(false);
+  const sun = solarState(hour);
+  const trees = treesFor(layout);
+  const point = (e: { clientX: number; clientY: number }) => {
+    const p = svg.current!.createSVGPoint();
+    p.x = e.clientX;
+    p.y = e.clientY;
+    const out = p.matrixTransform(svg.current!.getScreenCTM()!.inverse());
+    return { x: Math.round(out.x / 5) * 5, y: Math.round(out.y / 5) * 5 };
+  };
   const byId = Object.fromEntries(rows.map((r) => [r.facility_id, r]));
   return (
     <svg
-      className={`park-svg ${playing ? "is-playing" : ""}`}
+      ref={svg}
+      className={`park-svg ${editing ? "editing" : ""} ${placing ? "placing" : ""}`}
+      data-phase={sun.phase}
+      onPointerMove={(e) => {
+        if (!drag.current) return;
+        const p = point(e);
+        if (
+          Math.hypot(p.x - drag.current.startX, p.y - drag.current.startY) > 4
+        )
+          drag.current.moved = true;
+        setGhost({ id: drag.current.id, ...p });
+      }}
+      onPointerUp={(e) => {
+        if (!drag.current) return;
+        const d = drag.current;
+        const p = point(e);
+        drag.current = null;
+        setGhost(null);
+        if (d.moved) {
+          suppress.current = true;
+          onMove(d.id, p.x, p.y);
+          setTimeout(() => {
+            suppress.current = false;
+          }, 0);
+        }
+        if (svg.current?.hasPointerCapture(e.pointerId))
+          svg.current.releasePointerCapture(e.pointerId);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+        setGhost(null);
+      }}
+      onClick={(e) => {
+        if (placing && !suppress.current) {
+          const p = point(e);
+          onPlace(p.x, p.y);
+        }
+      }}
       viewBox="0 0 960 590"
       preserveAspectRatio="none"
-      role="img"
+      role="group"
       aria-label={`橡果公园地图，当前${hour}时，点击设施查看详情`}
     >
       <defs>
+        <radialGradient id="lampGlow">
+          <stop offset="0%" stopColor="#ffe9a5" stopOpacity=".6" />
+          <stop offset="100%" stopColor="#ffe9a5" stopOpacity="0" />
+        </radialGradient>
         <pattern
           id="grass"
           width="31"
@@ -271,20 +344,40 @@ export default function ParkMap({
             <path d="M3 0h9v3H3z" fill="#87a765" />
           </g>
         ))}
+        {sun.daylight > 0.01 &&
+          trees.map((t, i) => (
+            <ellipse
+              key={`shadow-${i}`}
+              className="tree-shadow"
+              cx={t.x + sun.shadowX * 0.5}
+              cy={t.y + sun.shadowY * 0.5}
+              rx={30 + Math.abs(sun.shadowX) * 0.22}
+              ry={15}
+              fill="#294f3d"
+              opacity={layer === "shade" ? 0.43 : 0.19}
+              transform={`rotate(${sun.shadowX / 9} ${t.x} ${t.y})`}
+            />
+          ))}
         {layer === "shade" &&
-          facilities.map((f) => {
+          layout.map((f) => {
             const r = byId[f.id];
             return (
               <g key={f.id} opacity={r?.shade_ratio ?? f.shade}>
                 <path
                   d={`M${f.x - 38} ${f.y - 3}h${58 + (hour < 12 ? 20 : 0)}v38h-58z`}
                   fill="#315f4d"
-                  opacity=".42"
+                  opacity=".12"
                 />
               </g>
             );
           })}
         {trees
+          .filter(
+            (t) =>
+              !layout.some(
+                (f) => f.kind === "树木" && f.x === t.x && f.y === t.y,
+              ),
+          )
           .sort((a, b) => a.y - b.y)
           .map((t, i) => (
             <Tree key={i} {...t} />
@@ -306,7 +399,7 @@ export default function ParkMap({
         <path d="M855 492h43v25h-43z" fill="#dcbb85" />
         <path d="M859 496h35v17h-35z" fill="#78956a" />
         {layer === "flow" &&
-          facilities.map((f) => {
+          layout.map((f) => {
             const r = byId[f.id];
             return r ? (
               <g key={f.id}>
@@ -329,7 +422,7 @@ export default function ParkMap({
               </g>
             ) : null;
           })}
-        {facilities.map((f) => {
+        {layout.map((f) => {
           const r = byId[f.id];
           const isSelected = selected === f.id;
           const isHighlight = highlight.includes(f.name);
@@ -340,11 +433,58 @@ export default function ParkMap({
             <g
               key={f.id}
               className={`map-facility ${isSelected ? "selected" : ""}`}
+              data-facility-id={f.id}
+              transform={
+                ghost?.id === f.id
+                  ? `translate(${ghost.x - f.x} ${ghost.y - f.y})`
+                  : undefined
+              }
+              onPointerDown={(e) => {
+                if (!editing || placing) return;
+                e.stopPropagation();
+                onSelect(f.id);
+                const p = point(e);
+                drag.current = {
+                  id: f.id,
+                  startX: p.x,
+                  startY: p.y,
+                  pointer: e.pointerId,
+                  moved: false,
+                };
+                svg.current?.setPointerCapture(e.pointerId);
+              }}
               role="button"
               tabIndex={0}
               aria-label={`${f.name}，${r?.occupied ?? 0}/${f.capacity}人，查看详情`}
-              onClick={() => onSelect(f.id)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!suppress.current) onSelect(f.id);
+              }}
               onKeyDown={(e) => {
+                if (
+                  editing &&
+                  ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(
+                    e.key,
+                  )
+                ) {
+                  e.preventDefault();
+                  onMove(
+                    f.id,
+                    f.x +
+                      (e.key === "ArrowLeft"
+                        ? -10
+                        : e.key === "ArrowRight"
+                          ? 10
+                          : 0),
+                    f.y +
+                      (e.key === "ArrowUp"
+                        ? -10
+                        : e.key === "ArrowDown"
+                          ? 10
+                          : 0),
+                  );
+                  return;
+                }
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
                   onSelect(f.id);
@@ -378,7 +518,7 @@ export default function ParkMap({
                 transform={`translate(${f.x} ${f.y})`}
                 filter="url(#mapShadow)"
               >
-                <FacilityIcon f={f} />
+                <FacilityIcon f={f} night={sun.night} />
               </g>
               <g transform={`translate(${f.x - 22} ${f.y + 31})`}>
                 <rect
@@ -400,50 +540,84 @@ export default function ParkMap({
                   fill={isSelected ? "#f6efda" : "#385745"}
                   className="map-count"
                 >
-                  {layer === "flow"
-                    ? (r?.visits ?? "–")
-                    : layer === "shade"
-                      ? `${Math.round((r?.shade_ratio ?? f.shade) * 100)}%`
-                      : `${r?.occupied ?? "–"}/${f.capacity}`}
+                  {f.kind === "路灯"
+                    ? sun.night
+                      ? "亮灯"
+                      : "路灯"
+                    : f.kind === "树木"
+                      ? "树木"
+                      : layer === "flow"
+                        ? (r?.visits ?? "–")
+                        : layer === "shade"
+                          ? `${Math.round((r?.shade_ratio ?? f.shade) * 100)}%`
+                          : `${r?.occupied ?? "–"}/${f.capacity}`}
                 </text>
               </g>
             </g>
           );
         })}
-        {rows.flatMap((r, fi) =>
-          Array.from(
-            { length: Math.min(5, Math.ceil(r.occupied / 5)) },
-            (_, j) => {
-              const f = facilities.find((f) => f.id === r.facility_id)!;
-              const x = f.x - 32 + ((fi * 19 + j * 23) % 65),
-                y = f.y - 19 + ((j * 17 + fi * 11) % 46);
-              const shirt = [
-                "#d48460",
-                "#f0deb1",
-                "#6e8c9f",
-                "#a87675",
-                "#e9bd67",
-              ][(fi + j) % 5];
-              return (
-                <g
-                  key={`${fi}-${j}`}
-                  className="pixel-person"
-                  style={{
-                    animationDelay: `-${(fi + j) * 0.7}s`,
-                    transformOrigin: `${x}px ${y}px`,
-                  }}
-                >
-                  <path d={`M${x} ${y}h5v4h-5z`} fill="#edc99a" />
-                  <path d={`M${x - 1} ${y + 4}h7v6h-7z`} fill={shirt} />
-                  <path
-                    d={`M${x} ${y + 10}h2v4h-2zm3 0h2v4h-2z`}
-                    fill="#53654f"
-                  />
-                </g>
-              );
-            },
-          ),
+        {editing && (
+          <g className="edit-grid" pointerEvents="none" opacity=".15">
+            {Array.from({ length: 19 }, (_, i) => (
+              <path
+                key={i}
+                d={`M${i * 50} 30V550`}
+                stroke="#244d3e"
+                strokeDasharray="2 6"
+              />
+            ))}
+            {Array.from({ length: 11 }, (_, i) => (
+              <path
+                key={i}
+                d={`M25 ${i * 50 + 30}H935`}
+                stroke="#244d3e"
+                strokeDasharray="2 6"
+              />
+            ))}
+          </g>
         )}
+        <Crowd visitors={visitors} motion={motion} layout={layout} />
+        <rect
+          className="night-overlay"
+          width="960"
+          height="590"
+          fill="#152c52"
+          opacity={sun.darkness}
+          pointerEvents="none"
+        />
+        <rect
+          className="sunset-overlay"
+          width="960"
+          height="590"
+          fill="#e6a362"
+          opacity={sun.warmth}
+          pointerEvents="none"
+        />
+        {sun.night &&
+          layout
+            .filter((f) => f.kind === "路灯" || f.kind === "咖啡")
+            .map((f) => (
+              <g
+                className="lit-lamp"
+                key={`light-${f.id}`}
+                pointerEvents="none"
+              >
+                <ellipse
+                  cx={f.x}
+                  cy={f.y + 4}
+                  rx="100"
+                  ry="63"
+                  fill="url(#lampGlow)"
+                />
+                <rect
+                  x={f.x - 6}
+                  y={f.y - (f.kind === "路灯" ? 31 : 12)}
+                  width="12"
+                  height="8"
+                  fill="#ffe5a0"
+                />
+              </g>
+            ))}
       </g>
       <g className="map-zone-labels">
         <text x="130" y="139">

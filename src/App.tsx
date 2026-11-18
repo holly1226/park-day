@@ -1,74 +1,123 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import gsap from "gsap";
+import { useGSAP } from "@gsap/react";
 import {
   ArrowDownToLine,
-  ArrowRight,
   ArrowUpRight,
   Check,
   ChevronDown,
-  ChevronRight,
   Code2,
   Database,
-  Flower2,
   Github,
   Info,
   Leaf,
+  Lightbulb,
   LoaderCircle,
   MapPin,
   MessageCircle,
+  Moon,
+  MousePointer2,
+  Move,
   Pause,
   Play,
+  Plus,
+  RotateCcw,
+  Save,
   Send,
-  Sprout,
   Sun,
   Thermometer,
   TreePine,
+  Undo2,
   Users,
   X,
 } from "lucide-react";
 import ParkMap from "./ParkMap";
+import ClickSpark from "./components/ClickSpark";
 import {
+  buildObservations,
   clock,
+  computerHour,
   download,
   facilities,
-  observations,
+  layoutKey,
+  palette,
+  placementIssue,
+  simulate,
   slots,
+  solarState,
+  timeSlot,
   toCSV,
+  validateLayout,
+  zoneAt,
+  type Facility,
   type Layer,
   type Observation,
+  type Scenario,
   type Weather,
 } from "./data";
 import {
+  comparisonQuery,
+  explanation,
   narrative,
   questions,
   queryFor,
   snapshotQuery,
+  summaryQuery,
   timelineQuery,
   type QuestionId,
 } from "./queries";
-import { runQuery } from "./engine";
+import { queryDataset } from "./engine";
+gsap.registerPlugin(useGSAP);
 type Row = Record<string, any>;
-const layerLabels: Record<Layer, string> = {
-  activity: "设施使用",
-  flow: "人流分布",
-  shade: "树荫分布",
-};
 const repo = "https://github.com/holly1226/park-day";
+const storageKey = "park-day-layout-v2";
+function initialLayout() {
+  try {
+    const saved = localStorage.getItem(storageKey);
+    return saved ? validateLayout(JSON.parse(saved)) : [...facilities];
+  } catch {
+    return [...facilities];
+  }
+}
+const glyph = (kind: string, size = 16) =>
+  kind === "树木" ? (
+    <TreePine size={size} />
+  ) : kind === "路灯" ? (
+    <Lightbulb size={size} />
+  ) : kind === "饮水" ? (
+    <span className="water-glyph">◉</span>
+  ) : kind === "凉亭" ? (
+    <span>⌂</span>
+  ) : (
+    <span>▤</span>
+  );
 export default function App() {
+  const root = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<Facility[]>(initialLayout);
+  const [history, setHistory] = useState<Facility[][]>([]);
+  const [scenario, setScenario] = useState<Scenario>("current");
+  const [editing, setEditing] = useState(false);
+  const [placing, setPlacing] = useState<string | null>(null);
   const [weather, setWeather] = useState<Weather>("mild");
-  const [hour, setHour] = useState(14);
+  const [hour, setHour] = useState(() => computerHour());
+  const [live, setLive] = useState(true);
+  const [playing, setPlaying] = useState(false);
+  const [motion, setMotion] = useState(true);
   const [layer, setLayer] = useState<Layer>("activity");
   const [selected, setSelected] = useState("b1");
-  const [playing, setPlaying] = useState(false);
   const [rows, setRows] = useState<Observation[]>([]);
+  const [summary, setSummary] = useState<Row | null>(null);
   const [timeline, setTimeline] = useState<Row[]>([]);
+  const [comparisons, setComparisons] = useState<Row[]>([]);
   const [question, setQuestion] = useState<QuestionId>("busy");
   const [result, setResult] = useState<Row[]>([]);
+  const [sql, setSql] = useState("");
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
-  const [sql, setSql] = useState("");
   const [evidence, setEvidence] = useState(false);
   const [about, setAbout] = useState(false);
+  const [notice, setNotice] = useState("");
   const [freeQuestion, setFreeQuestion] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState("");
@@ -79,12 +128,55 @@ export default function App() {
   } | null>(null);
   const sequence = useRef(0);
   const aiSequence = useRef(0);
-  const reportRef = useRef<HTMLElement>(null);
+  const upload = useRef<HTMLInputElement>(null);
+  const dataset = useMemo(() => buildObservations(layout), [layout]);
+  const datasetKey = useMemo(() => layoutKey(layout), [layout]);
+  const displayedLayout = scenario === "baseline" ? facilities : layout;
+  const slot = timeSlot(hour);
+  const sun = solarState(hour);
+  const visitors = useMemo(
+    () => simulate(displayedLayout, weather, slot, scenario).visitors,
+    [displayedLayout, weather, slot, scenario],
+  );
+  useGSAP(
+    () => {
+      const mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        gsap.from(".intro", {
+          autoAlpha: 0,
+          y: 10,
+          duration: 0.5,
+          ease: "power2.out",
+        });
+      });
+      return () => mm.revert();
+    },
+    { scope: root },
+  );
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => setHour(computerHour()), 10000);
+    return () => clearInterval(id);
+  }, [live]);
   useEffect(() => {
     if (!playing) return;
-    const id = setInterval(() => setHour((h) => (h >= 21 ? 6 : h + 0.5)), 1700);
+    const id = setInterval(
+      () => setHour((h) => (timeSlot(h) + 0.5) % 24),
+      1900,
+    );
     return () => clearInterval(id);
   }, [playing]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(layout));
+    } catch {
+      setNotice("浏览器未允许保存；当前方案仍可使用，也可下载。");
+    }
+  }, [layout]);
+  useEffect(() => {
+    if (selected && !displayedLayout.some((f) => f.id === selected))
+      setSelected(displayedLayout[0]?.id ?? "");
+  }, [displayedLayout, selected]);
   useEffect(() => {
     const id = ++sequence.current;
     aiSequence.current++;
@@ -93,43 +185,60 @@ export default function App() {
     setAiBusy(false);
     setBusy(true);
     setError("");
-    const q = queryFor(question, weather, hour);
-    Promise.all([
-      runQuery(snapshotQuery(weather, hour)),
-      runQuery(timelineQuery(weather)),
-      runQuery(q),
+    const q = queryFor(question, weather, slot, scenario);
+    queryDataset(dataset, datasetKey, [
+      snapshotQuery(weather, slot, scenario),
+      summaryQuery(weather, slot, scenario),
+      timelineQuery(weather, scenario),
+      q,
+      comparisonQuery(weather, slot),
     ])
-      .then(([snapshot, trend, answer]) => {
-        if (sequence.current !== id) return;
+      .then(([snapshot, overview, trend, answer, compare]) => {
+        if (id !== sequence.current) return;
         if (
-          snapshot.length !== facilities.length ||
+          snapshot.length !== displayedLayout.length ||
+          overview.length !== 1 ||
           trend.length !== slots.length
         )
-          throw new Error("观测数据不完整，请重新加载引擎");
+          throw new Error("观测记录不完整，请重试。");
         setRows(snapshot as Observation[]);
+        setSummary(overview[0]);
         setTimeline(trend);
         setResult(answer);
         setSql(q);
+        setComparisons(compare);
         setBusy(false);
       })
       .catch((e) => {
-        if (sequence.current === id) {
+        if (id === sequence.current) {
           setError(`分析引擎暂时未能完成查询：${e.message}`);
+          setSummary(null);
+          setRows([]);
+          setResult([]);
+          setTimeline([]);
+          setComparisons([]);
           setBusy(false);
           setPlaying(false);
         }
       });
-  }, [weather, hour, question, retry]);
+  }, [weather, slot, question, scenario, datasetKey, retry]);
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(""), 5500);
+    return () => clearTimeout(id);
+  }, [notice]);
   useEffect(() => {
     if (!about) return;
     const previous = document.activeElement as HTMLElement | null;
-    const close = document.getElementById("close-about");
-    close?.focus();
+    document.getElementById("close-about")?.focus();
+    const old = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     function key(e: KeyboardEvent) {
       if (e.key === "Escape") setAbout(false);
       if (e.key === "Tab") {
-        const dialog = document.getElementById("about-dialog");
-        const all = dialog?.querySelectorAll<HTMLElement>("button, a[href]");
+        const all = document
+          .getElementById("about-dialog")
+          ?.querySelectorAll<HTMLElement>("button,a[href]");
         if (!all?.length) return;
         const first = all[0],
           last = all[all.length - 1];
@@ -143,37 +252,116 @@ export default function App() {
       }
     }
     document.addEventListener("keydown", key);
-    const overflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", key);
-      document.body.style.overflow = overflow;
+      document.body.style.overflow = old;
       previous?.focus();
     };
   }, [about]);
-  const facility = facilities.find((f) => f.id === selected)!;
+  function commit(next: Facility[]) {
+    setHistory((h) => [...h.slice(-14), layout]);
+    setLayout(next);
+    setScenario("current");
+    setPlaying(false);
+  }
+  function startEditing() {
+    setEditing(true);
+    setScenario("current");
+    setPlaying(false);
+  }
+  function moveFacility(id: string, x: number, y: number) {
+    const f = layout.find((f) => f.id === id);
+    if (!f) return;
+    const problem = placementIssue(layout, x, y, id, f.kind);
+    if (problem) {
+      setNotice(problem);
+      return;
+    }
+    commit(
+      layout.map((f) =>
+        f.id === id
+          ? {
+              ...f,
+              x,
+              y,
+              zone: zoneAt(x, y),
+              description: "已移动的设施。使用情况按当前位置重新模拟。",
+            }
+          : f,
+      ),
+    );
+    setNotice("设施位置已更新，正在重新模拟并由 AVA 计算。");
+  }
+  function placeFacility(x: number, y: number) {
+    if (!placing) return;
+    if (layout.length >= 32) {
+      setNotice("最多放置 32 处设施，可先移除一处。");
+      return;
+    }
+    const problem = placementIssue(layout, x, y, undefined, placing);
+    if (problem) {
+      setNotice(problem);
+      return;
+    }
+    const spec = palette.find((p) => p.kind === placing)!;
+    const id = `custom-${crypto.randomUUID()}`;
+    commit([
+      ...layout,
+      {
+        id,
+        name: `新${spec.label} ${layout.filter((f) => f.kind === placing).length + 1}`,
+        kind: placing,
+        capacity: spec.capacity,
+        x,
+        y,
+        zone: zoneAt(x, y),
+        shade: 0,
+        description: "你添加的设施。拖动可重新布置，参数会影响规则模拟。",
+      },
+    ]);
+    setSelected(id);
+    setPlacing(null);
+    setNotice(`${spec.label}已添加，正在重新计算当前方案。`);
+  }
+  function undo() {
+    const last = history.at(-1);
+    if (!last) return;
+    setLayout(last);
+    setHistory((h) => h.slice(0, -1));
+    setScenario("current");
+    setNotice("已撤销上一次布置。");
+  }
+  function manualTime(value: number) {
+    setHour(value);
+    setLive(false);
+    setPlaying(false);
+  }
+  const f = displayedLayout.find((f) => f.id === selected);
   const current = rows.find((r) => r.facility_id === selected);
-  const resting = rows.filter((r) => r.kind === "座椅" || r.kind === "凉亭");
-  const total = rows.reduce((s, r) => s + r.occupied, 0);
-  const visits = rows.reduce((s, r) => s + r.visits, 0);
-  const seats = resting.reduce((s, r) => s + r.capacity - r.occupied, 0);
-  const mean = rows.length
-    ? Math.round(
-        rows.filter((r) => r.kind !== "饮水").reduce((s, r) => s + r.dwell, 0) /
-          rows.filter((r) => r.kind !== "饮水").length,
-      )
-    : 0;
-  const story = narrative(question, result, clock(hour));
-  const ranking = [...rows]
-    .filter((r) => r.kind !== "饮水")
-    .sort((a, b) => b.occupied / b.capacity - a.occupied / a.capacity)
-    .slice(0, 3);
+  const restingFacilities = rows.filter((r) =>
+    ["座椅", "凉亭"].includes(r.kind),
+  );
+  const seats = restingFacilities.reduce(
+    (s, r) => s + r.capacity - r.occupied,
+    0,
+  );
+  const baseline = comparisons.find((r) => r.scenario === "baseline");
+  const custom = comparisons.find((r) => r.scenario === "current");
+  const story = error
+    ? {
+        title: "当前方案的分析暂时不可用",
+        body: "请点击重新加载。设施布局已保留，查询恢复后会显示对应结果。",
+      }
+    : narrative(question, result);
+  const period = `${clock(slot)}–${clock(slot + 0.5)}`;
   const highlight = result.slice(0, 3).map((r) => String(r["设施"] ?? ""));
-  const pickQuestion = (q: QuestionId) => {
-    setQuestion(q);
-    setEvidence(false);
-    setAiResult(null);
-  };
+  const shownResult = aiResult?.data ?? result;
+  const answerLabel =
+    question === "layout"
+      ? "两种布局"
+      : scenario === "current"
+        ? "当前方案"
+        : "初始方案";
   async function askAI(e: React.FormEvent) {
     e.preventDefault();
     if (!freeQuestion.trim() || aiBusy) return;
@@ -182,24 +370,29 @@ export default function App() {
     setAiError("");
     setPlaying(false);
     try {
-      const r = await fetch("/api/analyze", {
+      const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: freeQuestion.trim(), weather, hour }),
+        body: JSON.stringify({
+          question: freeQuestion.trim(),
+          weather,
+          hour: slot,
+          layout,
+          scenario,
+        }),
         signal: AbortSignal.timeout(90000),
       });
-      if (!r.ok) {
+      if (!response.ok) {
         let message =
-          "自由提问需要启动本地 AI 服务。下载项目后配置 .env，运行 npm run ai；在线版可直接使用上方五个真实 AVA 查询。";
+          "自由提问需运行本地模型服务；上方五个分析可直接使用。配置方法见 GitHub README。";
         try {
-          const body = await r.json();
-          message = body.error || message;
+          message = (await response.json()).error || message;
         } catch {}
         throw new Error(message);
       }
-      const body = await r.json();
+      const value = await response.json();
       if (id === aiSequence.current) {
-        setAiResult(body);
+        setAiResult(value);
         setEvidence(true);
       }
     } catch (e) {
@@ -210,34 +403,42 @@ export default function App() {
     }
   }
   return (
-    <>
+    <div ref={root}>
       <header className="site-header">
         <div className="header-inner">
-          <a className="brand" href="#" aria-label="公园的一天首页">
+          <a className="brand" href="#">
             <span className="brand-tree">
               <TreePine size={24} />
             </span>
             <span>
-              公园的一天<small>PARK, A LITTLE CLOSER.</small>
+              公园的一天<small>PARK LAYOUT LAB</small>
             </span>
           </a>
           <nav aria-label="主导航">
-            <a className="active" href="#observe">
-              公园观察
-            </a>
-            <a href="#insights">发现与提问</a>
+            <button
+              className={!editing ? "active" : ""}
+              onClick={() => {
+                setEditing(false);
+                setPlacing(null);
+              }}
+            >
+              观察公园
+            </button>
+            <button className={editing ? "active" : ""} onClick={startEditing}>
+              布置设施
+            </button>
+            <a href="#insights">AVA 分析</a>
           </nav>
           <div className="header-actions">
             <button className="text-button" onClick={() => setAbout(true)}>
-              <Info size={15} />
-              数据与说明
+              <Info size={16} />
+              模拟规则
             </button>
             <a
               className="github-link"
               href={repo}
               target="_blank"
               rel="noreferrer"
-              aria-label="查看 GitHub 项目"
             >
               <Github size={18} />
               <span>GitHub</span>
@@ -250,13 +451,13 @@ export default function App() {
         <section className="intro">
           <div>
             <div className="eyebrow">
-              <span /> A LITTLE PARK OBSERVATORY
+              <span /> PARK SIMULATOR · AVA 4.0
             </div>
-            <h1>
-              把公园，<span>看得更近一点。</span>
-              <Flower2 className="title-flower" size={33} />
-            </h1>
-            <p>跟着一天的光影，发现人、树荫与小小设施之间的关系。</p>
+            <h1>公园人流与设施模拟器</h1>
+            <p>
+              自己布置长椅、树木和路灯，看看人往哪走、在哪停留，再用 AVA
+              比较方案。
+            </p>
           </div>
           <div className="intro-right">
             <div className="weather-switch" aria-label="天气场景">
@@ -279,39 +480,39 @@ export default function App() {
             </div>
             <span className="scenario-note">
               <span className="small-square" />
-              模拟夏日 · {weather === "mild" ? "24–29" : "31–38"}°C · 橡果公园
+              规则模拟 · 非实测预测 · 1 个小人 = 1 位访客
             </span>
           </div>
         </section>
-        <section className="metrics" aria-label="当前公园指标">
+        <section className="metrics" aria-label="当前模拟指标">
           {[
             {
-              label: "设施在场合计",
-              value: total,
+              label: "当前在园",
+              value: summary?.occupied,
               unit: "人",
-              note: "12 处设施的抽样快照",
+              note: `行走 ${summary?.walking ?? "—"} · 停留 ${summary?.resting ?? "—"}`,
               icon: <Users size={18} />,
             },
             {
-              label: "半小时到访合计",
-              value: visits,
+              label: "半小时入园人流量",
+              value: summary?.visits,
               unit: "人次",
-              note: "跨设施可重复计数",
+              note: `观测时段 ${period}`,
               icon: <ArrowUpRight size={19} />,
             },
             {
-              label: "还有位置坐",
-              value: seats,
+              label: "座椅与凉亭空位",
+              value: summary ? seats : undefined,
               unit: "席",
-              note: "座椅与凉亭空余座位",
+              note: "容量减去当前停留人数",
               icon: <TreePine size={19} />,
             },
             {
-              label: "设施平均停留",
-              value: mean,
-              unit: "分钟",
-              note: "各停留设施的简单平均",
-              icon: <Sun size={19} />,
+              label: "想停留但未能使用",
+              value: summary?.unserved,
+              unit: "人",
+              note: "模拟需求超出设施容量",
+              icon: <MousePointer2 size={18} />,
             },
           ].map((m, i) => (
             <div className="metric" key={m.label}>
@@ -319,26 +520,21 @@ export default function App() {
               <div>
                 <div className="metric-label">{m.label}</div>
                 <div className="metric-value">
-                  {rows.length ? m.value : "—"}
+                  {m.value ?? "—"}
                   <span>{m.unit}</span>
                 </div>
                 <small>{m.note}</small>
               </div>
-              {i === 0 && <span className="live-dot" title="模拟快照" />}
             </div>
           ))}
         </section>
-        <section
-          className="observatory"
-          id="observe"
-          aria-label="公园交互观察台"
-        >
+        <section className="observatory" id="observe">
           <div className="map-panel">
             <div className="panel-toolbar">
               <div className="park-location">
                 <MapPin size={16} />
                 <strong>橡果公园</strong>
-                <span>ACORN PARK</span>
+                <span>{displayedLayout.length} 处设施</span>
               </div>
               <div className="layer-switch" role="group" aria-label="地图图层">
                 {(["activity", "flow", "shade"] as Layer[]).map((l) => (
@@ -348,73 +544,120 @@ export default function App() {
                     aria-pressed={layer === l}
                     onClick={() => setLayer(l)}
                   >
-                    {layerLabels[l]}
+                    {l === "activity"
+                      ? "设施使用"
+                      : l === "flow"
+                        ? "人流热区"
+                        : "树荫分布"}
                   </button>
                 ))}
               </div>
             </div>
+            <div className="layout-toolbar">
+              <div className="scenario-tabs">
+                <button
+                  className={scenario === "current" ? "chosen" : ""}
+                  onClick={() => setScenario("current")}
+                >
+                  我的方案
+                </button>
+                <button
+                  className={scenario === "baseline" ? "chosen" : ""}
+                  onClick={() => {
+                    setScenario("baseline");
+                    setEditing(false);
+                    setPlacing(null);
+                  }}
+                >
+                  初始布局
+                </button>
+              </div>
+              <span className="layout-save">
+                <Check size={12} />
+                自动保存到本机
+              </span>
+              <button
+                className={editing ? "edit-toggle chosen" : "edit-toggle"}
+                onClick={() =>
+                  editing
+                    ? (setEditing(false), setPlacing(null))
+                    : startEditing()
+                }
+              >
+                <Move size={13} />
+                {editing ? "完成布置" : "布置设施"}
+              </button>
+            </div>
             <div
-              className={`map-canvas ${busy && rows.length ? "updating" : ""}`}
+              className={`map-canvas ${editing ? "editing-map" : ""} ${busy && summary ? "updating" : ""}`}
             >
               <ParkMap
                 rows={rows}
                 hour={hour}
                 layer={layer}
                 selected={selected}
-                onSelect={setSelected}
+                onSelect={(id) => {
+                  setSelected(id);
+                  setPlacing(null);
+                }}
                 highlight={highlight}
                 playing={playing}
+                layout={displayedLayout}
+                visitors={visitors}
+                editing={editing}
+                placing={placing}
+                motion={motion}
+                onMove={moveFacility}
+                onPlace={placeFacility}
               />
               <div className="map-stamp">
                 <span className="stamp-dot" />
-                一座正在发生的公园<small>PIXEL FIELD NOTES / 001</small>
+                {editing
+                  ? placing
+                    ? `点击地图放置${placing}`
+                    : "拖动设施，调整布局"
+                  : `${sun.phase} · ${summary?.walking ?? "—"} 人行走中`}
+                <small>
+                  {editing
+                    ? "支持拖动 / 选中后按方向键微调"
+                    : "一人一个小人 · 沿步道行走"}
+                </small>
               </div>
               <div className="map-clock">
-                <Sun size={16} />
+                {sun.night ? <Moon size={16} /> : <Sun size={16} />}
                 <strong>{clock(hour)}</strong>
                 <span>
-                  {current?.temperature ?? (weather === "hot" ? 37 : 28)}°C
+                  {sun.phase} · {summary?.temperature ?? "—"}°C
                 </span>
               </div>
-              {busy && !rows.length && (
+              {busy && !summary && (
                 <div className="map-loading">
                   <LoaderCircle className="spin" size={28} />
-                  <strong>公园正在醒来</strong>
-                  <span>正在加载本地 AVA 分析引擎…</span>
+                  <strong>正在打开公园模拟器</strong>
+                  <span>加载本地 AVA 分析引擎…</span>
                 </div>
               )}
               <div className="map-legend">
-                {layer === "activity" ? (
-                  <>
-                    <i className="legend-green" />
-                    轻松
-                    <i className="legend-gold" />
-                    热闹
-                    <i className="legend-red" />
-                    接近满员
-                  </>
-                ) : layer === "flow" ? (
-                  <>
-                    <i className="legend-gold" />
-                    色块越深，到访人次越多
-                  </>
-                ) : (
-                  <>
-                    <i className="legend-green" />
-                    深色为遮阴示意 · 标签为遮阴比例
-                  </>
-                )}
+                <i className="legend-green" />
+                {layer === "activity"
+                  ? "标签：停留人数 / 容量"
+                  : layer === "flow"
+                    ? "色块与标签：半小时到访人次"
+                    : "阴影方向和长度随时间变化"}
                 <span>
-                  点击设施探索 <ChevronRight size={12} />
+                  {sun.night ? "18:00–06:00 路灯开启" : "白天树影示意"} ·
+                  手机可左右滑动
                 </span>
               </div>
             </div>
-            <div className="timeline">
+            <div className="time-controls">
               <button
                 className="play-button"
-                onClick={() => setPlaying((p) => !p)}
+                onClick={() => {
+                  setLive(false);
+                  setPlaying((p) => !p);
+                }}
                 aria-label={playing ? "暂停时间播放" : "播放公园的一天"}
-                disabled={!!error}
               >
                 {playing ? (
                   <Pause size={16} fill="currentColor" />
@@ -422,15 +665,43 @@ export default function App() {
                   <Play size={16} fill="currentColor" />
                 )}
               </button>
+              <label className="time-input-label">
+                选择时间
+                <input
+                  type="time"
+                  value={clock(hour)}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const [h, m] = e.target.value.split(":").map(Number);
+                      manualTime(h + m / 60);
+                    }
+                  }}
+                  aria-label="选择具体时间"
+                />
+              </label>
+              <button
+                className={live ? "live-clock selected" : "live-clock"}
+                onClick={() => {
+                  setLive(true);
+                  setHour(computerHour());
+                  setPlaying(false);
+                }}
+              >
+                <span className="status-dot" />
+                {live ? "跟随电脑时间" : "回到电脑时间"}
+              </button>
+              <button
+                className="motion-toggle"
+                onClick={() => setMotion((m) => !m)}
+              >
+                {motion ? <Pause size={13} /> : <Play size={13} />}小人动画
+              </button>
+            </div>
+            <div className="timeline new-timeline">
               <div className="timeline-main">
-                <div className="timeline-caption">
-                  <strong>公园的一天</strong>
-                  <span>拖动时间，看看哪里发生了变化</span>
-                  <b>{clock(hour)}</b>
-                </div>
                 <div className="timeline-track">
                   <svg
-                    viewBox="0 0 620 30"
+                    viewBox="0 0 960 32"
                     preserveAspectRatio="none"
                     aria-hidden="true"
                   >
@@ -438,136 +709,288 @@ export default function App() {
                       <rect
                         key={i}
                         x={i * 20}
-                        y={30 - Math.max(3, Number(r.occupied) * 0.15)}
+                        y={32 - Math.max(1, r.occupied * 0.21)}
                         width="12"
-                        height={Math.max(3, Number(r.occupied) * 0.15)}
-                        rx="1"
+                        height={Math.max(1, r.occupied * 0.21)}
                         fill={Number(r.hour) <= hour ? "#78936c" : "#d6dcc7"}
                       />
                     ))}
                   </svg>
                   <input
                     type="range"
-                    min="6"
-                    max="21"
-                    step="0.5"
-                    value={hour}
-                    onChange={(e) => {
-                      setHour(Number(e.target.value));
-                      setPlaying(false);
-                    }}
+                    min="0"
+                    max="23.5"
+                    step=".5"
+                    value={slot}
+                    onChange={(e) => manualTime(Number(e.target.value))}
                     aria-label="观察时间"
-                    aria-valuetext={clock(hour)}
+                    aria-valuetext={clock(slot)}
                   />
                 </div>
                 <div className="time-labels">
-                  <span>06:00 清晨</span>
-                  <span>09:00</span>
-                  <span>12:00 午后</span>
-                  <span>15:00</span>
-                  <span>18:00 黄昏</span>
-                  <span>21:00</span>
+                  <span>00:00 夜间</span>
+                  <span>06:00 日出</span>
+                  <span>12:00 正午</span>
+                  <span>18:00 亮灯</span>
+                  <span>23:30</span>
                 </div>
               </div>
             </div>
           </div>
-          <aside className="detail-panel">
+          <aside className="detail-panel new-detail">
             <div className="detail-heading">
-              <span className="eyebrow">A MOMENT IN THE PARK</span>
-              <span className="outline-chip">{clock(hour)} 快照</span>
+              <span className="eyebrow">
+                {editing ? "LAYOUT EDITOR" : "LIVE SIMULATION"}
+              </span>
+              <span className="outline-chip">
+                {clock(hour)} · {sun.phase}
+              </span>
             </div>
-            <h2>
-              此刻，公园里<span>。</span>
-            </h2>
-            <p className="detail-subtitle">每一处停留，都让空间有了表情。</p>
-            <div className="selected-card">
-              <div className="selected-card-top">
-                <span className="facility-type">
-                  <TreePine size={13} />
-                  {facility.kind} · {facility.zone}
-                </span>
-                <span className="selected-marker">正在观察</span>
-              </div>
-              <h3>
-                {facility.name}
-                <span>↗</span>
-              </h3>
-              <p>{facility.description}</p>
-              <div className="capacity-line">
-                <strong>
-                  {current?.occupied ?? "—"}
-                  <small>
-                    {" "}
-                    / {facility.capacity}{" "}
-                    {facility.kind === "座椅" || facility.kind === "凉亭"
-                      ? "席"
-                      : "人"}
-                  </small>
-                </strong>
-                <span>
-                  {current
-                    ? Math.round((current.occupied / facility.capacity) * 100)
-                    : "—"}
-                  % 使用中
-                </span>
-              </div>
-              <div className="occupancy-track">
-                <span
-                  style={{
-                    width: `${current ? (current.occupied / facility.capacity) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-              <div className="facility-facts">
-                <div>
-                  <Sun size={15} />
-                  <span>遮阴比例</span>
-                  <b>
-                    {current ? Math.round(current.shade_ratio * 100) : "—"}%
-                  </b>
-                </div>
-                <div>
-                  <Leaf size={15} />
-                  <span>平均停留</span>
-                  <b>{current?.dwell ?? "—"} 分钟</b>
-                </div>
-              </div>
-            </div>
-            <div className="ranking-heading">
-              <span>此刻人气角落</span>
-              <small>按设施占用率</small>
-            </div>
-            <div className="ranking">
-              {ranking.map((r, i) => (
-                <button
-                  key={r.facility_id}
-                  onClick={() => setSelected(r.facility_id)}
-                  className={selected === r.facility_id ? "picked" : ""}
+            <h2>{editing ? "布置你的公园" : "选中设施详情"}</h2>
+            <p className="detail-subtitle">
+              {editing
+                ? "选择工具后点地图添加；已有设施可直接拖动。"
+                : "点地图上的设施，查看这半小时的使用情况。"}
+            </p>
+            {editing && (
+              <>
+                <ClickSpark
+                  style={{ height: "auto" }}
+                  sparkColor={["#91ae6b", "#d5ae6b"]}
+                  sparkSize={6}
+                  sparkRadius={20}
+                  sparkCount={6}
+                  duration={350}
+                  shape="dot"
                 >
-                  <span className="rank-number">0{i + 1}</span>
-                  <div>
-                    <strong>{r.name}</strong>
-                    <span className="mini-track">
-                      <i
-                        style={{ width: `${(r.occupied / r.capacity) * 100}%` }}
-                      />
-                    </span>
+                  <div className="palette-grid">
+                    {palette.map((p) => (
+                      <button
+                        key={p.kind}
+                        aria-label={`添加${p.label}`}
+                        className={placing === p.kind ? "chosen" : ""}
+                        onClick={() =>
+                          setPlacing(placing === p.kind ? null : p.kind)
+                        }
+                        aria-pressed={placing === p.kind}
+                      >
+                        {glyph(p.kind, 19)}
+                        <span>添加{p.label}</span>
+                      </button>
+                    ))}
+                    <button
+                      className={!placing ? "chosen" : ""}
+                      onClick={() => setPlacing(null)}
+                    >
+                      <Move size={19} />
+                      <span>移动设施</span>
+                    </button>
                   </div>
-                  <b>
-                    {Math.round((r.occupied / r.capacity) * 100)}
-                    <small>%</small>
-                  </b>
-                  <ChevronRight size={13} />
-                </button>
-              ))}
+                </ClickSpark>
+                <div className="editor-actions">
+                  <button onClick={undo} disabled={!history.length}>
+                    <Undo2 size={13} />
+                    撤销
+                  </button>
+                  <button
+                    onClick={() => {
+                      commit([...facilities]);
+                      setPlacing(null);
+                      setNotice("已恢复初始布局，可用撤销返回。");
+                    }}
+                  >
+                    <RotateCcw size={13} />
+                    重置布局
+                  </button>
+                </div>
+              </>
+            )}
+            {f ? (
+              <div className="selected-card">
+                <div className="selected-card-top">
+                  <span className="facility-type">
+                    {glyph(f.kind, 13)}
+                    {f.kind} · {f.zone}
+                  </span>
+                  <span className="selected-marker">
+                    {editing ? "可拖动" : "选中"}
+                  </span>
+                </div>
+                <h3>
+                  {f.name}
+                  <span>↗</span>
+                </h3>
+                {["路灯", "树木"].includes(f.kind) ? (
+                  <>
+                    <p>
+                      {f.kind === "路灯"
+                        ? sun.night
+                          ? "路灯已亮起。165 地图单位内的设施获得模拟照明覆盖。"
+                          : "白天熄灯，18:00 自动开启，影响夜间停留选择。"
+                        : "树冠的投影随时间移动，影响附近设施的遮阴与高温吸引力。"}
+                    </p>
+                    <strong className="infrastructure-status">
+                      {f.kind === "路灯"
+                        ? sun.night
+                          ? "● 灯光已开启"
+                          : "○ 等待夜晚"
+                        : "● 为附近空间提供树荫"}
+                    </strong>
+                  </>
+                ) : (
+                  <>
+                    <div className="capacity-line">
+                      <strong>
+                        {current?.occupied ?? "—"}
+                        <small> / {f.capacity} 人</small>
+                      </strong>
+                      <span>当前停留</span>
+                    </div>
+                    <div className="occupancy-track">
+                      <span
+                        style={{
+                          width: `${current ? (current.occupied / f.capacity) * 100 : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="facility-facts">
+                      <div>
+                        <Sun size={14} />
+                        <span>{sun.night ? "夜间照明" : "遮阴比例"}</span>
+                        <b>
+                          {sun.night
+                            ? current?.light
+                              ? "有灯"
+                              : "未覆盖"
+                            : `${Math.round((current?.shade_ratio ?? 0) * 100)}%`}
+                        </b>
+                      </div>
+                      <div>
+                        <Users size={14} />
+                        <span>到访人次</span>
+                        <b>{current?.visits ?? "—"}</b>
+                      </div>
+                    </div>
+                    <p className="facility-demand">
+                      想使用 {current?.demand ?? "—"} 人 · 未能使用{" "}
+                      {current?.unserved ?? "—"} 人
+                    </p>
+                  </>
+                )}
+                {editing && !["路灯", "树木"].includes(f.kind) && (
+                  <label className="capacity-edit">
+                    设施容量
+                    <input
+                      type="number"
+                      min="1"
+                      max="80"
+                      value={f.capacity}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        if (Number.isInteger(n) && n >= 1 && n <= 80)
+                          commit(
+                            layout.map((item) =>
+                              item.id === f.id
+                                ? { ...item, capacity: n }
+                                : item,
+                            ),
+                          );
+                      }}
+                      aria-label="设施容量"
+                    />
+                    人
+                  </label>
+                )}
+                {editing && (
+                  <button
+                    className="remove-facility"
+                    onClick={() => {
+                      commit(layout.filter((item) => item.id !== f.id));
+                      setPlacing(null);
+                      setNotice("设施已移除，可用撤销恢复。");
+                    }}
+                  >
+                    <X size={13} />
+                    移除这处{f.kind}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="empty-facility">
+                <TreePine size={26} />
+                <p>还没有设施，选一个工具开始布置。</p>
+              </div>
+            )}
+            <div className="layout-comparison">
+              <div className="ranking-heading">
+                <span>与初始布局比较</span>
+                <small>相同人数 · 同一时段</small>
+              </div>
+              <div>
+                <span>停留人数</span>
+                <strong>
+                  {baseline?.resting ?? "—"} <ArrowUpRight size={12} />{" "}
+                  {custom?.resting ?? "—"}
+                </strong>
+              </div>
+              <div>
+                <span>未能使用</span>
+                <strong>
+                  {baseline?.unserved ?? "—"} <ArrowUpRight size={12} />{" "}
+                  {custom?.unserved ?? "—"}
+                </strong>
+              </div>
+              <button
+                onClick={() => {
+                  setQuestion("layout");
+                  document
+                    .getElementById("insights")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                查看 AVA 方案分析 <ArrowUpRight size={14} />
+              </button>
             </div>
-            <div className="observation-tip">
-              <Sprout size={20} />
-              <p>
-                试试切换到高温天气，
-                <br />
-                看看人们的停留发生了什么变化。
-              </p>
+            <div className="layout-file-actions">
+              <button
+                onClick={() =>
+                  download(
+                    "my-park-layout.json",
+                    JSON.stringify(layout, null, 2),
+                    "application/json",
+                  )
+                }
+              >
+                <Save size={13} />
+                下载方案
+              </button>
+              <button onClick={() => upload.current?.click()}>
+                <Plus size={13} />
+                导入方案
+              </button>
+              <input
+                ref={upload}
+                type="file"
+                accept="application/json,.json"
+                hidden
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    if (file.size > 64000)
+                      throw new Error("文件过大，请导入本工具导出的方案。");
+                    const next = validateLayout(JSON.parse(await file.text()));
+                    commit(next);
+                    setEditing(true);
+                    setNotice("方案已导入，正在重新模拟。");
+                  } catch (error) {
+                    setNotice(
+                      error instanceof Error ? error.message : "无法导入方案。",
+                    );
+                  }
+                  e.target.value = "";
+                }}
+              />
             </div>
           </aside>
         </section>
@@ -588,36 +1011,71 @@ export default function App() {
             </>
           ) : (
             <span>
-              {busy ? "AVA 正在读取和计算…" : "AVA 4.0 已完成真实查询"}
+              {busy ? "AVA 正在计算当前方案…" : "AVA 已完成当前方案查询"}
               <span className="engine-separator">/</span>
-              {observations.length} 条模拟观测
-              <span className="engine-separator">/</span>计算在浏览器本地执行
+              {dataset.length} 条模拟记录 · {period}
+              <span className="engine-separator">/</span>
+              当前方案与初始布局均已载入
             </span>
           )}
           <button onClick={() => setAbout(true)}>
-            <Info size={13} /> 数据口径
+            <Info size={13} />
+            模拟规则
           </button>
         </div>
-        <section className="insights-section" id="insights" ref={reportRef}>
+        {notice && (
+          <div className="notice" role="alert">
+            <Info size={16} />
+            {notice}
+            <button onClick={() => setNotice("")} aria-label="关闭提示">
+              <X size={15} />
+            </button>
+          </div>
+        )}
+        <section className="insights-section" id="insights">
           <div className="section-heading">
             <div>
-              <div className="eyebrow">FOLLOW YOUR CURIOSITY</div>
-              <h2>
-                问问这座公园<span>。</span>
-              </h2>
-              <p>从一个小问题出发，让数据带你多看一层。</p>
+              <div className="eyebrow">FROM SIMULATION TO ANALYSIS</div>
+              <h2>AVA 具体分析了什么？</h2>
+              <p>
+                模拟器生成访客和使用记录；AVA
+                读取这些记录，执行下面的筛选、计算与方案比较。
+              </p>
             </div>
             <span className="ava-badge">
-              <Database size={14} /> Powered by AVA 4.0
+              <Database size={14} />
+              真实查询 · 本地计算
+            </span>
+          </div>
+          <div className="analysis-context">
+            <span>
+              <strong>分析方案</strong>
+              {answerLabel}
+            </span>
+            <span>
+              <strong>天气</strong>
+              {weather === "mild" ? "普通天气" : "高温天气"}
+            </span>
+            <span>
+              <strong>数据时段</strong>
+              {period}
+            </span>
+            <span>
+              <strong>设施记录</strong>
+              {displayedLayout.length} 条 / 时段
             </span>
           </div>
           <div className="insight-grid">
-            <div className="question-list" aria-label="预设分析问题">
+            <div className="question-list">
               {questions.map((q) => (
                 <button
                   key={q.id}
                   className={question === q.id ? "chosen" : ""}
-                  onClick={() => pickQuestion(q.id)}
+                  onClick={() => {
+                    setQuestion(q.id);
+                    setAiResult(null);
+                    setEvidence(false);
+                  }}
                   aria-pressed={question === q.id}
                 >
                   <span className="question-number">{q.icon}</span>
@@ -625,7 +1083,7 @@ export default function App() {
                     <strong>{q.label}</strong>
                     <small>{q.short}</small>
                   </span>
-                  <ArrowUpRight size={17} />
+                  <ArrowUpRight size={16} />
                 </button>
               ))}
             </div>
@@ -633,98 +1091,92 @@ export default function App() {
               <div className="answer-top">
                 <span>
                   <span className="status-dot" />
-                  {aiResult ? "模型自由分析" : "AVA · 预设问题 / 真实 SQL"}
+                  {aiResult ? "AVA · 模型自由分析" : "AVA · 当前模拟数据分析"}
                 </span>
                 <small>
-                  {clock(hour)} · {weather === "mild" ? "普通天气" : "高温天气"}
+                  {answerLabel} · {period}
                 </small>
               </div>
-              <h3>{aiResult ? "从你的问题，再看一层公园。" : story.title}</h3>
+              <h3>{aiResult ? "针对你的问题，分析结果如下" : story.title}</h3>
               <p className="answer-body">{aiResult?.summary ?? story.body}</p>
+              {!aiResult && (
+                <ol className="query-steps">
+                  {explanation(
+                    question,
+                    displayedLayout.length,
+                    period,
+                    answerLabel,
+                  ).map((step, i) => (
+                    <li key={step}>
+                      <span>{i + 1}</span>
+                      {step}
+                    </li>
+                  ))}
+                </ol>
+              )}
               {!aiResult && result.length > 0 && (
-                <div className="result-bars" aria-label="分析结果图表">
+                <div className="result-bars">
                   {result.slice(0, 5).map((r, i) => {
-                    const label = String(r["设施"] ?? r["遮阴分组"] ?? "");
-                    const value = Number(
-                      r["占用率%"] ??
-                        r["平均停留分钟"] ??
-                        r["空余座位"] ??
-                        r["人数变化"] ??
-                        r["到访人次"] ??
-                        0,
+                    const key =
+                      question === "busy"
+                        ? "到访人次"
+                        : question === "seats"
+                          ? "空余座位"
+                          : question === "shade"
+                            ? "停留人数"
+                            : question === "layout"
+                              ? "人数变化"
+                              : "停留人数";
+                    const value = Number(r[key] ?? 0);
+                    const max = Math.max(
+                      1,
+                      ...result
+                        .slice(0, 5)
+                        .map((r) => Math.abs(Number(r[key] ?? 0))),
                     );
-                    const all = result
-                      .slice(0, 5)
-                      .map((r) =>
-                        Math.abs(
-                          Number(
-                            r["占用率%"] ??
-                              r["平均停留分钟"] ??
-                              r["空余座位"] ??
-                              r["人数变化"] ??
-                              r["到访人次"] ??
-                              0,
-                          ),
-                        ),
-                      );
-                    const max = Math.max(...all, 1);
                     return (
-                      <div className="result-bar" key={label}>
-                        <span>{label}</span>
+                      <div className="result-bar" key={i}>
+                        <span>{r["设施"] ?? r["设施分组"]}</span>
                         <div>
                           <i
                             style={{
-                              width: `${Math.max((Math.abs(value) / max) * 100, 2)}%`,
-                              background: i === 0 ? "#78956c" : "#c2cdb1",
+                              width: `${Math.max(2, (Math.abs(value) / max) * 100)}%`,
+                              background:
+                                value < 0
+                                  ? "#bc806b"
+                                  : i === 0
+                                    ? "#78956c"
+                                    : "#c2cdb1",
                             }}
                           />
                         </div>
                         <b>
                           {value}
-                          {question === "busy"
-                            ? "%"
-                            : question === "shade"
-                              ? "分"
-                              : question === "seats"
-                                ? "席"
-                                : question === "weather"
-                                  ? "人"
-                                  : "人次"}
+                          {question === "seats"
+                            ? "席"
+                            : question === "busy"
+                              ? "人次"
+                              : "人"}
                         </b>
                       </div>
                     );
                   })}
-                  <div className="chart-caption">
-                    {question === "busy"
-                      ? "设施占用率"
-                      : question === "shade"
-                        ? "设施平均停留时间"
-                        : question === "seats"
-                          ? "空余座位"
-                          : question === "weather"
-                            ? "高温场景 − 普通场景在场人数"
-                            : "按周转参考值排序，图示到访人次"}{" "}
-                    · 来自 AVA 查询结果
-                  </div>
                 </div>
               )}
               <div className="answer-actions">
                 <button
-                  onClick={() => setEvidence((v) => !v)}
+                  onClick={() => setEvidence((e) => !e)}
                   aria-expanded={evidence}
                 >
                   <Code2 size={15} />
-                  {evidence ? "收起计算依据" : "查看 SQL 与数据"}
+                  {evidence ? "收起 SQL 与结果表" : "查看 SQL 与结果表"}
                   <ChevronDown size={13} />
                 </button>
                 <button
                   onClick={() =>
-                    download(
-                      "park-analysis.csv",
-                      toCSV(aiResult?.data ?? result),
-                    )
+                    download("park-analysis.csv", toCSV(shownResult))
                   }
-                  disabled={!result.length && !aiResult}
+                  disabled={!shownResult.length}
                 >
                   <ArrowDownToLine size={15} />
                   导出结果
@@ -732,8 +1184,8 @@ export default function App() {
               </div>
               {busy && (
                 <div className="answer-loading">
-                  <LoaderCircle className="spin" size={20} />
-                  <span>正在通过 AVA 更新分析</span>
+                  <LoaderCircle className="spin" size={19} />
+                  <span>AVA 正在重新计算</span>
                 </div>
               )}
             </div>
@@ -742,28 +1194,26 @@ export default function App() {
             <div className="evidence-panel">
               <div className="evidence-title">
                 <Database size={16} />
-                <strong>计算依据</strong>
-                <span>
-                  {(aiResult?.data ?? result).length} 行结果 · 数据集 data
-                </span>
+                <strong>真实执行的 SQL 与返回结果</strong>
+                <span>{shownResult.length} 行结果</span>
               </div>
               <pre>
                 <code>{aiResult?.sql ?? sql}</code>
               </pre>
               <div className="table-scroll">
-                {(aiResult?.data ?? result).length ? (
+                {shownResult.length ? (
                   <table>
                     <thead>
                       <tr>
-                        {Object.keys((aiResult?.data ?? result)[0]).map((k) => (
+                        {Object.keys(shownResult[0]).map((k) => (
                           <th key={k}>{k}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {(aiResult?.data ?? result).slice(0, 100).map((r, i) => (
+                      {shownResult.slice(0, 100).map((row, i) => (
                         <tr key={i}>
-                          {Object.values(r).map((v, j) => (
+                          {Object.values(row).map((v, j) => (
                             <td key={j}>{String(v ?? "—")}</td>
                           ))}
                         </tr>
@@ -771,7 +1221,7 @@ export default function App() {
                     </tbody>
                   </table>
                 ) : (
-                  <p>查询成功，没有符合条件的数据。</p>
+                  <p>查询成功，当前条件下没有结果。</p>
                 )}
               </div>
             </div>
@@ -782,7 +1232,7 @@ export default function App() {
               value={freeQuestion}
               maxLength={1000}
               onChange={(e) => setFreeQuestion(e.target.value)}
-              placeholder="还有好奇的？输入你的问题（自由提问需配置本地模型）"
+              placeholder="自由提问（需配置本地模型）；以上五个分析无需密钥"
               aria-label="自由提问"
             />
             <button type="submit" disabled={aiBusy || !freeQuestion.trim()}>
@@ -801,112 +1251,76 @@ export default function App() {
             </div>
           )}
         </section>
-        <section className="field-note">
-          <div className="field-note-art">
-            <TreePine size={40} />
-            <Leaf size={20} />
-          </div>
-          <div>
-            <span className="eyebrow">A NOTE FROM THE FIELD</span>
-            <h3>好的空间，藏在每一个被看见的日常里。</h3>
-            <p>
-              这是一个探索公共空间的交互原型。数据为确定性生成的模拟观测，树荫与人物为示意，期待下一次走进真实的公园。
-            </p>
-          </div>
-          <button
-            onClick={() =>
-              download("acorn-park-observations.csv", toCSV(observations))
-            }
-          >
-            <ArrowDownToLine size={16} />
-            下载示例数据
-          </button>
-        </section>
       </main>
       <footer>
         <a className="footer-brand" href="#">
           <TreePine size={17} />
-          公园的一天
+          公园的一天 · 布局实验室
         </a>
-        <span>Made for curious people & a little greener world.</span>
+        <span>原创像素场景 · GSAP 动画 · React Bits 交互 · AVA 数据分析</span>
         <div>
-          <span className="demo-label">模拟数据 · 非实时监测</span>
-          <a href={repo} target="_blank" rel="noreferrer">
-            开源项目 <ArrowUpRight size={12} />
-          </a>
+          <button
+            onClick={() => download("park-simulation.csv", toCSV(dataset))}
+          >
+            <ArrowDownToLine size={12} />
+            下载模拟记录
+          </button>
+          <span className="demo-label">规则模拟 · 非实测预测</span>
         </div>
       </footer>
       {about && (
         <div className="modal-backdrop" onClick={() => setAbout(false)}>
           <section
-            className="about-modal"
             id="about-dialog"
+            className="about-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="about-title"
             onClick={(e) => e.stopPropagation()}
           >
             <button
-              className="modal-close"
               id="close-about"
+              className="modal-close"
               onClick={() => setAbout(false)}
-              aria-label="关闭数据说明"
+              aria-label="关闭模拟规则"
             >
               <X size={20} />
             </button>
-            <div className="eyebrow">BEHIND THE LITTLE PARK</div>
+            <div className="eyebrow">HOW THE PARK WORKS</div>
             <h2 id="about-title">
-              一座模拟公园，
+              你布置设施，模拟器生成人流，
               <br />
-              一次真实的数据探索。
+              AVA 计算使用与方案差异。
             </h2>
+            <h3>1. 时间与场景</h3>
             <p>
-              橡果公园为原创虚构场地。{observations.length} 条观测覆盖 12
-              处设施、31
-              个半小时时段与两种天气。所有数字由确定性规则生成，用来展示分析与交互能力。
+              默认读取电脑的本地时间。可手动选择
+              00:00–23:59，分析使用所在半小时的快照。日出、日落和阴影为固定的示意周期，未接入真实地理日照或天气。
             </p>
-            <h3>数据怎么读？</h3>
-            <ul>
-              <li>
-                <strong>在场人数：</strong>
-                设施在某时刻的模拟快照，合计不是公园独立访客数。
-              </li>
-              <li>
-                <strong>到访人次：</strong>
-                半小时内到访该设施的人次，允许跨设施重复。
-              </li>
-              <li>
-                <strong>平均停留：</strong>
-                设施级模拟平均值，整体展示为非饮水设施的简单平均。
-              </li>
-              <li>
-                <strong>空余座位：</strong>
-                仅统计座椅与凉亭；其他设施容量表示可容纳人数。
-              </li>
-              <li>
-                <strong>树荫与人物：</strong>
-                示意图层；人物按数量缩放绘制，不代表真实轨迹或逐人定位。
-              </li>
-            </ul>
-            <h3>AVA 真正做了什么？</h3>
+            <h3>2. 人流与设施使用</h3>
             <p>
-              AVA 4.0.4 接入社区 DuckDB-Wasm 引擎，在浏览器执行
-              source、schema、semantic 和
-              query。地图快照、时间曲线、指标和五个分析问题均读取真实查询结果。预设问题使用固定
-              SQL，文字结论由结果模板生成。
+              每个小人是一位模拟访客。在园人数按时段和天气生成；其中一部分沿步道行走，另一部分按设施容量、步道可达性、遮阴与照明选择停留。满员后计入“未能使用”。同一天气同时段的两个布局使用相同访客人数。
+            </p>
+            <h3>3. 树木与路灯</h3>
+            <p>
+              树冠投影的位置和方向随时间变化。路灯 18:00 至次日 06:00 亮起，165
+              地图单位范围内标记照明覆盖；咖啡屋有建筑灯光。夜间模型降低无灯设施的吸引力。这里只演示规则，不计算真实照度。
+            </p>
+            <h3>4. AVA 的计算</h3>
+            <p>
+              AVA 4.0
+              载入初始与当前方案的模拟记录，真实执行筛选、汇总、排序和方案关联查询。地图快照、入园曲线、总览指标、对比数字和分析表读取查询结果。行为模拟与地图由本项目代码实现，AVA
+              不负责预测真实行人。
             </p>
             <p>
-              自由提问需在本地 .env 配置模型，运行 npm run ai，通过 AVA analyze
-              处理；密钥只保留在本地服务。地图和图表为本项目代码绘制。
+              入园人次来自全园模拟记录；设施到访允许重复。遮阴分组的平均停留只对有使用者的停留设施取简单平均。模拟规则已经包含遮阴与灯光偏好，因此结果不能作为实证结论。
             </p>
             <button
               className="primary-button"
-              onClick={() =>
-                download("acorn-park-observations.csv", toCSV(observations))
-              }
+              onClick={() => download("park-simulation.csv", toCSV(dataset))}
             >
-              <ArrowDownToLine size={16} />
-              下载完整模拟数据
+              <ArrowDownToLine size={15} />
+              下载完整记录
             </button>
             <a
               className="modal-source"
@@ -914,11 +1328,11 @@ export default function App() {
               target="_blank"
               rel="noreferrer"
             >
-              了解 AVA <ArrowUpRight size={14} />
+              AVA 项目 <ArrowUpRight size={13} />
             </a>
           </section>
         </div>
       )}
-    </>
+    </div>
   );
 }

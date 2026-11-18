@@ -1,6 +1,6 @@
 {
   "name": "park-day",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "A pixel park observatory powered by real AVA queries.",
@@ -16,7 +16,9 @@
   "dependencies": {
     "@antv/ava": "4.0.4",
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0",
+    "@gsap/react": "^2.1.2",
     "ava-engine-duckdb-wasm": "0.1.1",
+    "gsap": "^3.15.1",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
